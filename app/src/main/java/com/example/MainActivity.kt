@@ -71,6 +71,17 @@ data class Recipe(
     val category: String
 )
 
+data class GkiVersionOption(
+    val id: String,
+    val name: String,
+    val versionLabel: String,
+    val defaultRepo: String,
+    val defaultBranch: String,
+    val defaultDefconfig: String,
+    val defaultSusfsPatch: String,
+    val isTensorG5: Boolean = false
+)
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun KernelWorkbenchApp() {
@@ -81,6 +92,28 @@ fun KernelWorkbenchApp() {
     var repoUrl by remember { mutableStateOf("https://github.com/google/aosp-kernel-gki-laguna") }
     var branch by remember { mutableStateOf("laguna-android15-6.6") }
     var defconfig by remember { mutableStateOf("gki_defconfig") }
+    var susfsPatchUrl by remember { mutableStateOf("https://raw.githubusercontent.com/l0ck3d0ninvestment/susfs-laguna-patch/main/susfs_gki_6.6.sh") }
+
+    val gkiVersions = listOf(
+        GkiVersionOption("6.6_laguna", "GKI 6.6 (Pixel 10 Laguna - Recommended)", "6.6", "https://github.com/google/aosp-kernel-gki-laguna", "laguna-android15-6.6", "gki_defconfig", "https://raw.githubusercontent.com/l0ck3d0ninvestment/susfs-laguna-patch/main/susfs_gki_6.6.sh", true),
+        GkiVersionOption("6.6_generic", "GKI 6.6 (Generic Common)", "6.6", "https://android.googlesource.com/kernel/common", "common-android15-6.6", "gki_defconfig", "https://raw.githubusercontent.com/pomfs/susfs4ksu/main/patches/6.6/0001-add-susfs-to-gki-kernel.patch"),
+        GkiVersionOption("6.1", "GKI 6.1 (Generic Common)", "6.1", "https://android.googlesource.com/kernel/common", "common-android14-6.1", "gki_defconfig", "https://raw.githubusercontent.com/pomfs/susfs4ksu/main/patches/6.1/0001-add-susfs-to-gki-kernel.patch"),
+        GkiVersionOption("5.15", "GKI 5.15 (Generic Common)", "5.15", "https://android.googlesource.com/kernel/common", "common-android13-5.15", "gki_defconfig", "https://raw.githubusercontent.com/pomfs/susfs4ksu/main/patches/5.15/0001-add-susfs-to-gki-kernel.patch"),
+        GkiVersionOption("5.10", "GKI 5.10 (Generic Common)", "5.10", "https://android.googlesource.com/kernel/common", "common-android12-5.10", "gki_defconfig", "https://raw.githubusercontent.com/pomfs/susfs4ksu/main/patches/5.10/0001-add-susfs-to-gki-kernel.patch"),
+        GkiVersionOption("custom", "Custom GKI Version...", "Custom", "", "", "gki_defconfig", "")
+    )
+    var selectedGkiIndex by remember { mutableStateOf(0) }
+
+    val onGkiVersionSelected = { index: Int ->
+        selectedGkiIndex = index
+        val option = gkiVersions[index]
+        if (option.id != "custom") {
+            repoUrl = option.defaultRepo
+            branch = option.defaultBranch
+            defconfig = option.defaultDefconfig
+            susfsPatchUrl = option.defaultSusfsPatch
+        }
+    }
     
     val clangOptions = listOf(
         ClangOption("Stable AOSP Clang r522817", "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/llvm-binutils-stable/clang-r522817.tar.gz", "AOSP stable toolchain recommended for Tensor Google Pixel 10 kernels."),
@@ -95,7 +128,6 @@ fun KernelWorkbenchApp() {
     var kernelsuNextEnabled by remember { mutableStateOf(true) }
     var kernelsuVersion by remember { mutableStateOf("next") }
     var susfsEnabled by remember { mutableStateOf(true) }
-    var susfsPatchUrl by remember { mutableStateOf("https://raw.githubusercontent.com/l0ck3d0ninvestment/susfs-laguna-patch/main/susfs_gki_6.6.sh") }
     var zeromountEnabled by remember { mutableStateOf(true) }
     var bbrEnabled by remember { mutableStateOf(true) }
     
@@ -301,14 +333,15 @@ ${buildSteps.toString()}
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "PIXEL 10 KERNEL WORKBENCH",
+                            text = "MULTI-GKI KERNEL WORKBENCH",
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
                             fontFamily = FontFamily.SansSerif
                         )
+                        val currentGki = gkiVersions[selectedGkiIndex]
                         Text(
-                            text = "Google Tensor G5 (Laguna) • GKI 6.6.y • Custom Rom Shield",
+                            text = "Target: ${currentGki.name} • ${if (currentGki.isTensorG5) "Tensor G5" else "Generic Arm64"}",
                             fontSize = 11.sp,
                             color = Color(0xFF94A3B8),
                             fontWeight = FontWeight.Medium
@@ -389,7 +422,8 @@ ${buildSteps.toString()}
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Config Ready (AnyKernel3)", color = Color(0xFF10B981), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Target: Pixel 10 (Laguna) 6.6", color = Color(0xFF64748B), fontSize = 11.sp)
+                    val option = gkiVersions[selectedGkiIndex]
+                    Text("Target: ${option.name}", color = Color(0xFF64748B), fontSize = 11.sp)
                 }
                 Button(
                     onClick = {
@@ -397,16 +431,17 @@ ${buildSteps.toString()}
                         isCompilingSim = true
                         terminalLogs.clear()
                         coroutineScope.launch {
-                            terminalLogs.add("⏳ [RUNNER] Launching Google Pixel 10 Custom GKI simulated compiler pipeline...")
+                            val option = gkiVersions[selectedGkiIndex]
+                            terminalLogs.add("⏳ [RUNNER] Launching ${option.name} simulated compiler pipeline...")
                             delay(500)
                             terminalLogs.add("📦 [DEPS] Preparing build space. Allocating 120GB system runner disk.")
                             delay(500)
-                            terminalLogs.add("⬇️ [CLANG] Downloading active Tensor G5 Compiler Toolchain:")
+                            terminalLogs.add("⬇️ [CLANG] Downloading active Compiler Toolchain:")
                             terminalLogs.add("  ➜ Link: $activeClangUrl")
                             delay(800)
                             terminalLogs.add("✅ [CLANG] Successfully set up and integrated compiler in /clang/bin.")
                             delay(500)
-                            terminalLogs.add("🌐 [GIT] Cloning core Pixel 10 kernel branch repository:")
+                            terminalLogs.add("🌐 [GIT] Cloning target kernel branch repository:")
                             terminalLogs.add("  ➜ Repo: $repoUrl")
                             terminalLogs.add("  ➜ Branch: $branch")
                             delay(1000)
@@ -472,7 +507,68 @@ ${buildSteps.toString()}
                     ) {
                         item {
                             Text(
-                                text = "GOOGLE PIXEL 10 TARGET SETTINGS",
+                                text = "GKI BASE KERNEL SELECTION",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF10B981),
+                                letterSpacing = 1.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                gkiVersions.forEachIndexed { index, option ->
+                                    val selected = selectedGkiIndex == index
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(if (selected) Color(0xFF111827) else Color.Transparent)
+                                            .border(
+                                                width = 1.dp,
+                                                color = if (selected) Color(0xFF10B981) else Color(0xFF1F2937),
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable { onGkiVersionSelected(index) }
+                                            .padding(12.dp)
+                                            .testTag("gki_option_${option.id}")
+                                    ) {
+                                        RadioButton(
+                                            selected = selected,
+                                            onClick = { onGkiVersionSelected(index) },
+                                            colors = RadioButtonDefaults.colors(selectedColor = Color(0xFF10B981))
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(option.name, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color.White)
+                                                if (option.isTensorG5) {
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .background(Color(0xFF10B981).copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    ) {
+                                                        Text("Tensor G5", color = Color(0xFF10B981), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                                    }
+                                                }
+                                            }
+                                            if (option.id != "custom") {
+                                                Text("Def: ${option.defaultBranch} • ${option.defaultRepo.substringAfterLast("/")}", fontSize = 11.sp, color = Color(0xFF64748B))
+                                            } else {
+                                                Text("Manual target branch & custom GKI clone overrides.", fontSize = 11.sp, color = Color(0xFF64748B))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Text(
+                                text = "FINE-TUNED SOURCE OVERRIDES",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFF10B981),
@@ -483,7 +579,7 @@ ${buildSteps.toString()}
                             OutlinedTextField(
                                 value = repoUrl,
                                 onValueChange = { repoUrl = it },
-                                label = { Text("Laguna Kernel Repository URL") },
+                                label = { Text("Active Kernel Repository URL") },
                                 singleLine = true,
                                 modifier = Modifier
                                     .fillMaxWidth()

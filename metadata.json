@@ -1,6 +1,6 @@
 {
   "name": "Pixel 10 Workbench",
-  "description": "Android 15 (6.6-GKI) custom kernel builder workbench. Offers config generation, workflow files, recipes, and compile testing runner simulation.",
+  "description": "Custom kernel builder workbench for Pixel 10 (Laguna) and general GKI (5.10, 5.15, 6.1, 6.6) configuration. Generates actions, recipes, and compile simulation.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

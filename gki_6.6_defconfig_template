@@ -1,0 +1,110 @@
+#
+# Base Android GKI (Generic Kernel Image) 6.6 Defconfig Template
+# Target: Android 15 (Kernel 6.6-GKI)
+# Generated for: Google Pixel 10 Laguna Custom Kernel Workbench
+# This template contains standard base parameters combined with target inline blocks
+# to activate KernelSU-Next, SusFS, and High-Speed TCP BBR.
+#
+
+# Core Architecture Settings
+CONFIG_ARM64=y
+CONFIG_64BIT=y
+CONFIG_CPU_BIG_LITTLE=y
+CONFIG_SCHED_MC=y
+CONFIG_SMP=y
+CONFIG_NR_CPUS=8
+CONFIG_HZ_100=y
+CONFIG_ARCH_SPARSEMEM_ENABLE=y
+
+# General Setup
+CONFIG_LOCALVERSION="-Laguna-Custom"
+CONFIG_AUDIT=y
+CONFIG_NO_HZ_IDLE=y
+CONFIG_HIGH_RES_TIMERS=y
+CONFIG_PREEMPT=y
+CONFIG_PREEMPT_RT=n
+
+# Android Core Features
+CONFIG_ANDROID=y
+CONFIG_ANDROID_BINDER_IPC=y
+CONFIG_ANDROID_BINDERFS=y
+CONFIG_ANDROID_BINDER_DEVICES="binder,hwbinder,vndbinder"
+CONFIG_ANDROID_BINDER_IPC_SELFTEST=n
+
+# namespaces
+CONFIG_NAMESPACES=y
+CONFIG_UTS_NS=y
+CONFIG_IPC_NS=y
+CONFIG_USER_NS=y
+CONFIG_PID_NS=y
+CONFIG_NET_NS=y
+
+# Virtualization / Container supports
+CONFIG_CGROUPS=y
+CONFIG_CGROUP_FREEZER=y
+CONFIG_CGROUP_PIDS=y
+CONFIG_CGROUP_DEVICE=y
+CONFIG_CPUSETS=y
+CONFIG_PROC_PID_CPUSET=y
+CONFIG_CGROUP_CPUACCT=y
+CONFIG_PAGE_COUNTER=y
+CONFIG_MEMCG=y
+CONFIG_MEMCG_SWAP=y
+CONFIG_CGROUP_SCHED=y
+CONFIG_FAIR_GROUP_SCHED=y
+CONFIG_CFS_BANDWIDTH=y
+
+# File Systems configuration
+CONFIG_EXT4_FS=y
+CONFIG_EXT4_USE_FOR_EXT2=y
+CONFIG_EXT4_FS_POSIX_ACL=y
+CONFIG_EXT4_FS_SECURITY=y
+CONFIG_F2FS_FS=y
+CONFIG_F2FS_FS_SECURITY=y
+CONFIG_F2FS_FS_COMPRESSION=y
+CONFIG_FS_ENCRYPTION=y
+CONFIG_FS_VERITY=y
+CONFIG_TMPFS=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_TMPFS_XATTR=y
+
+# =====================================================================
+# FEATURE: KERNELSU-NEXT (rifsxd setup hooks)
+# =====================================================================
+# Incorporates root management mechanisms directly embedded into core structures.
+# Check drivers/kernelsu/Makefile and run setup.sh to generate the driver files.
+CONFIG_KSU=y
+CONFIG_KSU_DEBUG=n
+
+# =====================================================================
+# FEATURE: SUSFS (Zygote Mount Overlay Cloak)
+# =====================================================================
+# Completely masks unsafe mounts, system artifacts, and tracking loops.
+# Make sure the susfs patches are fully executed prior to setting these configs.
+CONFIG_SUSFS=y
+CONFIG_KSU_SUSFS=y
+CONFIG_SUSFS_SUS_MOUNT=y
+CONFIG_SUSFS_SUS_PATH=y
+CONFIG_SUSFS_TRY_UMOUNT=y
+CONFIG_SUSFS_SECURE_MOUNT=y
+
+# =====================================================================
+# FEATURE: ZEROMOUNT & OVERLAY VFS ENHANCEMENTS
+# =====================================================================
+# Required to compile nested mount hides and handle secondary loops safely.
+CONFIG_OVERLAY_FS=y
+CONFIG_OVERLAY_FS_REDIRECT_DIR=y
+CONFIG_OVERLAY_FS_INDEX=y
+CONFIG_OVERLAY_FS_XINO_AUTO=y
+
+# =====================================================================
+# FEATURE: HIGH-SPEED TCP BBRv3 CONGESTION CONTROL & PACING
+# =====================================================================
+# TCP BBRv3 relies on fair queueing packet schedulers to pace transmissions.
+CONFIG_NET_SCHED=y
+CONFIG_NET_SCH_FQ=y
+CONFIG_NET_SCH_FQ_CODEL=y
+CONFIG_INET=y
+CONFIG_TCP_CONG_BBR=y
+CONFIG_DEFAULT_TCP_CONG="bbr"
+CONFIG_DEFAULT_NET_SCH="fq"
