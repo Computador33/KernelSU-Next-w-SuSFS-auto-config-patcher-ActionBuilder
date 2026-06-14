@@ -657,13 +657,31 @@ ${buildSteps.toString()}
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         item {
-                            Text(
-                                text = "GKI BASE KERNEL SELECTION",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF10B981),
-                                letterSpacing = 1.sp
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "GKI BASE KERNEL SELECTION",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF10B981),
+                                    letterSpacing = 1.sp
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .background(Color(0xFF38BDF8).copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+                                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "3 Choices Available",
+                                        color = Color(0xFF38BDF8),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                             Spacer(modifier = Modifier.height(8.dp))
                             
                             Column(
@@ -817,6 +835,90 @@ ${buildSteps.toString()}
                                 
                                 if (overrideSublevel) {
                                     Spacer(modifier = Modifier.height(12.dp))
+                                    
+                                    // Interactive Sublevel Presets based on selected kernel version (showing 3 top options)
+                                    val currentVersionLabel = gkiVersions[selectedGkiIndex].versionLabel
+                                    val sublevelPresets = when (currentVersionLabel) {
+                                        "6.6" -> listOf("102", "98", "85")
+                                        "6.1" -> listOf("112", "75", "50")
+                                        "5.15" -> listOf("135", "110", "80")
+                                        "5.10" -> listOf("190", "160", "120")
+                                        else -> listOf("102", "75", "135")
+                                    }
+                                    
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(Color(0xFF111827).copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                                            .border(1.dp, Color(0xFF1F2937), RoundedCornerShape(6.dp))
+                                            .padding(10.dp)
+                                    ) {
+                                        Text(
+                                            text = "SUBLEVEL PRESETS (${currentVersionLabel}.x)",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF38BDF8),
+                                            letterSpacing = 0.5.sp
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            sublevelPresets.forEach { preset ->
+                                                val isSelectedPreset = sublevelVersion == preset
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(
+                                                            if (isSelectedPreset) Color(0xFF10B981) else Color(0xFF1E293B),
+                                                            RoundedCornerShape(6.dp)
+                                                        )
+                                                        .clickable { 
+                                                            sublevelVersion = preset
+                                                            if (currentVersionLabel == "6.6") {
+                                                                if (preset == "102") localversionOverride = "-android15-6.6-laguna"
+                                                                else if (preset == "98") localversionOverride = "-android15-6.6"
+                                                                else localversionOverride = "-android14-6.6"
+                                                            } else {
+                                                                localversionOverride = "-android14-${currentVersionLabel}"
+                                                            }
+                                                        }
+                                                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = ".${preset}",
+                                                        color = if (isSelectedPreset) Color.Black else Color.White,
+                                                        fontSize = 11.sp,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
+                                            
+                                            val isCustomSublevel = sublevelVersion !in sublevelPresets
+                                            Box(
+                                                modifier = Modifier
+                                                    .background(
+                                                        if (isCustomSublevel) Color(0xFF38BDF8) else Color(0xFF0F172A),
+                                                        RoundedCornerShape(6.dp)
+                                                    )
+                                                    .border(
+                                                        width = 1.dp,
+                                                        color = if (isCustomSublevel) Color.Transparent else Color(0xFF1F2937),
+                                                        shape = RoundedCornerShape(6.dp)
+                                                    )
+                                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Custom",
+                                                    color = if (isCustomSublevel) Color.Black else Color(0xFF475569),
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                    }
+                                    
+                                    Spacer(modifier = Modifier.height(10.dp))
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(12.dp)

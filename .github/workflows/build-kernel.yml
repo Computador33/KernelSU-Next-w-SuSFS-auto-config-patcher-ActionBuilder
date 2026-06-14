@@ -47,6 +47,23 @@ on:
         required: true
         type: boolean
         default: true
+      override_sublevel:
+        description: 'Override/Spoof Kernel SUBLEVEL Version & Localversion'
+        required: true
+        type: boolean
+        default: true
+      sublevel_version:
+        description: 'Forced Sublevel Patch Version (e.g. 102)'
+        required: false
+        default: '102'
+      localversion_override:
+        description: 'Forced Localversion / Extra version string'
+        required: false
+        default: '-android15-6.6-laguna'
+      pre_compilation_hook_commands:
+        description: 'Injectable pre-compilation troubleshooting commands'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -67,7 +84,7 @@ jobs:
       - name: Prep Compiling Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 libelf-dev libfl-dev
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 libelf-dev libfl-dev zstd lz4
 
       - name: Retrieve Google Clang Compiler
         run: |
@@ -80,6 +97,25 @@ jobs:
       - name: Fetch Pixel 10 kernel tree
         run: |
           git clone --depth=1 -b ${{ github.event.inputs.kernel_branch }} ${{ github.event.inputs.kernel_repo }} $GITHUB_WORKSPACE/kernel-source
+
+      - name: GKI Automated Compilation Error Patch Correction
+        if: ${{ github.event.inputs.pre_compilation_hook_commands != '' }}
+        run: |
+          cd $GITHUB_WORKSPACE/kernel-source
+          ${{ github.event.inputs.pre_compilation_hook_commands }}
+
+      - name: Spoof Kernel Sublevel & Localversion
+        if: ${{ github.event.inputs.override_sublevel == true || github.event.inputs.override_sublevel == 'true' }}
+        run: |
+          cd $GITHUB_WORKSPACE/kernel-source
+          echo "Forcing sublevel patch version override to: ${{ github.event.inputs.sublevel_version }}"
+          sed -i "s/^SUBLEVEL =.*/SUBLEVEL = ${{ github.event.inputs.sublevel_version }}/" Makefile
+          if [ -f "localversion" ]; then
+            echo "${{ github.event.inputs.localversion_override }}" > localversion
+          else
+            echo "${{ github.event.inputs.localversion_override }}" >> localversion
+          fi
+          echo "Injected localversion identifier overlay: $(cat localversion)"
 
       - name: Integrate KernelSU-Next
         if: ${{ github.event.inputs.kernelsu_next_enabled == true || github.event.inputs.kernelsu_next_enabled == 'true' }}
