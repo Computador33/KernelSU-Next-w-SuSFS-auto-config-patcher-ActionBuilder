@@ -19,7 +19,7 @@ It centers highly requested root concealments and network optimizations:
 The Actions builder at `.github/workflows/build-kernel.yml` removes compiling overhead completely. It automates build space setup, LLVM downloading, patching, compiling, and packaging into a recovery-flashable ZIP.
 
 ### How to Build on GitHub Actions:
-1. **Push your workspace** (incorporating the `.github/` folder) to your personal GitHub repository.
+1. **Fork the workspace** (incorporating the `.github/` folder) to your personal GitHub repository.
 2. Navigate to your repository on **GitHub** and enter the **Actions** tab.
 3. In the sidebar on the left, select **"Android Custom Kernel Builder (Pixel 10 - Laguna 6.6)"**.
 4. Click **"Run workflow"** on the right side.
