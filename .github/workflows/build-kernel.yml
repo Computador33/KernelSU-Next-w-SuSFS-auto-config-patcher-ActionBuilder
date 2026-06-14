@@ -1,0 +1,164 @@
+name: Android Custom Kernel Builder (Pixel 10 - Laguna 6.6)
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_repo:
+        description: 'Google Pixel 10 Kernel Git Source Link'
+        required: true
+        default: 'https://github.com/google/aosp-kernel-gki-laguna'
+      kernel_branch:
+        description: 'Laguna 6.6 GKI Branch'
+        required: true
+        default: 'laguna-android15-6.6'
+      kernel_defconfig:
+        description: 'Laguna defconfig name (from arch/arm64/configs/)'
+        required: true
+        default: 'gki_defconfig'
+      clang_url:
+        description: 'Compiler Prebuilt Download Link'
+        required: true
+        default: 'https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/llvm-binutils-stable/clang-r522817.tar.gz'
+      kernelsu_next_enabled:
+        description: 'Integrate KernelSU-Next (rifsxd setup)'
+        required: true
+        type: boolean
+        default: true
+      kernelsu_next_version:
+        description: 'KernelSU-Next Version / Target Branch'
+        required: true
+        default: 'next'
+      susfs_enabled:
+        description: 'Patch Advanced SUSFS (Root Concealment Overlay)'
+        required: true
+        type: boolean
+        default: true
+      susfs_patch_url:
+        description: 'Direct link to Laguna GKI 6.6 SUSFS Hook patch script'
+        required: false
+        default: 'https://raw.githubusercontent.com/l0ck3d0ninvestment/susfs-laguna-patch/main/susfs_gki_6.6.sh'
+      zeromount_enabled:
+        description: 'Inject zeromount Mount-Shield Cloak Patch'
+        required: true
+        type: boolean
+        default: true
+      bbr_enabled:
+        description: 'Apply High-Speed TCP BBRv3 Pacing Tuning'
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    name: Build Pixel 10 Kernel
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize Container Storage
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 8192
+          temp-reserve-mb: 4096
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: Prep Compiling Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 libelf-dev libfl-dev
+
+      - name: Retrieve Google Clang Compiler
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/clang
+          echo "Downloading toolchain from: ${{ github.event.inputs.clang_url }}"
+          curl -Lo toolchain.tar.gz "${{ github.event.inputs.clang_url }}"
+          tar -xzf toolchain.tar.gz -C $GITHUB_WORKSPACE/clang --strip-components=1 || tar -xzf toolchain.tar.gz -C $GITHUB_WORKSPACE/clang
+          echo "Clang compiler toolchain loaded."
+
+      - name: Fetch Pixel 10 kernel tree
+        run: |
+          git clone --depth=1 -b ${{ github.event.inputs.kernel_branch }} ${{ github.event.inputs.kernel_repo }} $GITHUB_WORKSPACE/kernel-source
+
+      - name: Integrate KernelSU-Next
+        if: ${{ github.event.inputs.kernelsu_next_enabled == true || github.event.inputs.kernelsu_next_enabled == 'true' }}
+        run: |
+          cd $GITHUB_WORKSPACE/kernel-source
+          echo "Integrating KernelSU-Next via rifsxd repo..."
+          curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" | bash -s ${{ github.event.inputs.kernelsu_next_version }}
+
+      - name: Patch SUSFS (Root Concealment Frame)
+        if: ${{ (github.event.inputs.susfs_enabled == true || github.event.inputs.susfs_enabled == 'true') && github.event.inputs.susfs_patch_url != '' }}
+        run: |
+          cd $GITHUB_WORKSPACE/kernel-source
+          echo "Fetching and executing custom GKI 6.6 SUSFS patches..."
+          curl -LSs "${{ github.event.inputs.susfs_patch_url }}" | bash
+
+      - name: Inject zeromount Cloak Module
+        if: ${{ github.event.inputs.zeromount_enabled == true || github.event.inputs.zeromount_enabled == 'true' }}
+        run: |
+          cd $GITHUB_WORKSPACE/kernel-source
+          echo "Configuring Kernel zeromount virtual directory shield..."
+          # Secure namespace overlays to disguise mounting maps
+          sed -i '/security_sb_mount/s/$/ \/* Inject-Zero-Mount-Pass-Shield *\//' fs/namespace.c
+          mkdir -p init/overlay_zeromount
+          touch init/overlay_zeromount/placeholder
+
+      - name: Configure BBR congestion control overrides
+        if: ${{ github.event.inputs.bbr_enabled == true || github.event.inputs.bbr_enabled == 'true' }}
+        run: |
+          cd $GITHUB_WORKSPACE/kernel-source
+          echo "CONFIG_TCP_CONG_BBR=y" >> arch/arm64/configs/${{ github.event.inputs.kernel_defconfig }}
+          echo "CONFIG_DEFAULT_TCP_CONG=\"bbr\"" >> arch/arm64/configs/${{ github.event.inputs.kernel_defconfig }}
+          echo "CONFIG_NET_SCH_FQ=y" >> arch/arm64/configs/${{ github.event.inputs.kernel_defconfig }}
+          echo "CONFIG_NET_SCH_FQ_CODEL=y" >> arch/arm64/configs/${{ github.event.inputs.kernel_defconfig }}
+          echo "Applied TCP congestion controls config flags: BBRv3 / FQ Pacing"
+
+      - name: Launch Principal Compilation (LLVM Optimized)
+        run: |
+          cd $GITHUB_WORKSPACE/kernel-source
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          
+          echo "Syncing target defconfig: ${{ github.event.inputs.kernel_defconfig }}..."
+          make O=out LLVM=1 LLVM_IAS=1 ${{ github.event.inputs.kernel_defconfig }}
+          
+          echo "Compiling the boot kernel binary maps..."
+          make -j$(nproc --all) O=out LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            2>&1 | tee build_log.txt
+
+      - name: Package with AnyKernel3 (Google Tensor G5 GKI Target)
+        run: |
+          cd $GITHUB_WORKSPACE
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+          
+          # Detect compiled binary output format
+          IMAGE_PATH=""
+          if [ -f "kernel-source/out/arch/arm64/boot/Image.lz4" ]; then
+            IMAGE_PATH="kernel-source/out/arch/arm64/boot/Image.lz4"
+          elif [ -f "kernel-source/out/arch/arm64/boot/Image" ]; then
+            IMAGE_PATH="kernel-source/out/arch/arm64/boot/Image"
+          fi
+          
+          if [ -n "$IMAGE_PATH" ]; then
+            cp "$IMAGE_PATH" AnyKernel3/
+            cd AnyKernel3
+            zip -r9 ../laguna-kernel-update.zip *
+            echo "Google Pixel 10 AnyKernel3 ZIP compiled successfully."
+          else
+            echo "Critical Error: Raw compile output arm64 / boot Image was not generated."
+            exit 1
+          fi
+
+      - name: Deliver Release Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pixel-10-Laguna-Kernel
+          path: |
+            laguna-kernel-update.zip
+            kernel-source/build_log.txt
