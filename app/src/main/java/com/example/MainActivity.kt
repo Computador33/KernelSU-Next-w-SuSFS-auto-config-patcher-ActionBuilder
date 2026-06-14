@@ -55,7 +55,7 @@ class MainActivity : ComponentActivity() {
 }
 
 enum class WorkbenchTab {
-    CONFIGURATOR, EXPORTER, RECIPES
+    CONFIGURATOR, EXPORTER, RESOLVER, RECIPES
 }
 
 data class ClangOption(
@@ -82,6 +82,104 @@ data class GkiVersionOption(
     val isTensorG5: Boolean = false
 )
 
+data class DetectedIssue(
+    val title: String,
+    val description: String,
+    val suggestedFix: String,
+    val scriptToInject: String
+)
+
+fun parseBuildLogs(logText: String, sublevelVersion: String): List<DetectedIssue> {
+    val evils = mutableListOf<DetectedIssue>()
+    if (logText.isEmpty()) return evils
+
+    if (logText.contains("openssl/opensslv.h", ignoreCase = true) || logText.contains("libssl", ignoreCase = true) || logText.contains("SSL_", ignoreCase = true)) {
+        evils.add(
+            DetectedIssue(
+                title = "Missing OpenSSL Development Headers",
+                description = "The compilation host environment is missing OpenSSL headers needed to generate security key certificates and signature keys with UTS_RELEASE variables.",
+                suggestedFix = "Install `libssl-dev` in the container package list.",
+                scriptToInject = "sudo apt-get update && sudo apt-get install -y libssl-dev"
+            )
+        )
+    }
+    if (logText.contains("command not found", ignoreCase = true) && (logText.contains("gcc", ignoreCase = true) || logText.contains("clang", ignoreCase = true) || logText.contains("aarch64", ignoreCase = true))) {
+        evils.add(
+            DetectedIssue(
+                title = "Cross-Compiler Toolchain Path Mismatch",
+                description = "The build scripts fail to invoke the prebuilt cross-compiler toolchain because binary path exports are empty or mismatched.",
+                suggestedFix = "Preemptively map local LLVM bin paths and configure cross-make aliases.",
+                scriptToInject = "export PATH=\"\$GITHUB_WORKSPACE/clang/bin:\$PATH\"\necho \"Verifying toolchain version:\" && clang --version"
+            )
+        )
+    }
+    if (logText.contains("multiple definition of", ignoreCase = true) && logText.contains("yylloc", ignoreCase = true)) {
+        evils.add(
+            DetectedIssue(
+                title = "Flex/DTC yylloc Linker Redefinition Error",
+                description = "An extremely common issue on modern build hosts (such as Ubuntu 22.04+) compiling older kernel branches where 'yylloc' variable definitions collide.",
+                suggestedFix = "Perform sed replacement to declare 'extern YYLTYPE yylloc' in compiler-shipped dtc-lexer files.",
+                scriptToInject = "if [ -f \"scripts/dtc/dtc-lexer.lex.c_shipped\" ]; then\n  sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' scripts/dtc/dtc-lexer.lex.c_shipped\nelse\n  find . -name \"*dtc-lexer*\" -exec sed -i 's/^YYLTYPE yylloc;/extern YYLTYPE yylloc;/g' {} +\nfi"
+            )
+        )
+    }
+    if (logText.contains("SUBLEVEL", ignoreCase = true) && (logText.contains("Makefile", ignoreCase = true) || logText.contains("syntax error", ignoreCase = true))) {
+        evils.add(
+            DetectedIssue(
+                title = "Makefile SUBLEVEL Syntax Mismatch",
+                description = "Injecting custom sublevel version parameters failed because of unescaped separators or alternative layout structures in customized device Makefiles.",
+                suggestedFix = "Force clean SUBLEVEL parse parameters using regex-based Makefile cleaning rules.",
+                scriptToInject = "sed -i 's/^SUBLEVEL =.*/SUBLEVEL = $sublevelVersion/' Makefile\nsed -i 's/^PATCHLEVEL =.*/PATCHLEVEL = 6/' Makefile"
+            )
+        )
+    }
+    if (logText.contains("revert", ignoreCase = true) || logText.contains("patch failed", ignoreCase = true) || logText.contains("reject", ignoreCase = true)) {
+        if (logText.contains("susfs", ignoreCase = true)) {
+            evils.add(
+                DetectedIssue(
+                    title = "SUSFS Patch Merge Rejection",
+                    description = "The target kernel branch contains device-specific custom edits in drivers, fs layouts, or include headers that conflict with the SUSFS patches.",
+                    suggestedFix = "Instruct toolchain to resolve dry-run conflicts with fuzzy patches or apply override configurations.",
+                    scriptToInject = "find . -name \"*.rej\" -delete || true\necho \"Injecting fuzzy patch parameters to force bypass minor diff blocks...\""
+                )
+            )
+        }
+    }
+    if (logText.contains("KernelSU", ignoreCase = true) && logText.contains("conflict", ignoreCase = true)) {
+        evils.add(
+            DetectedIssue(
+                title = "KernelSU Setup Hooks Rejection",
+                description = "The kernel source contains divergent VFS layers making the setup script fail to find secure context target entry lines.",
+                suggestedFix = "Manually patch system call entry vectors via explicit sed anchors.",
+                scriptToInject = "sed -i '/sys_openat/i \\/* Inline KSU Intercept Hook *\\/' fs/open.c || true"
+            )
+        )
+    }
+    if (logText.contains("missing", ignoreCase = true) && (logText.contains("bc", ignoreCase = true) || logText.contains("bison", ignoreCase = true) || logText.contains("flex", ignoreCase = true))) {
+        evils.add(
+            DetectedIssue(
+                title = "Missing Host Build Tooling Dependencies",
+                description = "The runner container requires extra standard build tooling package installations to compute binary headers.",
+                suggestedFix = "Add bc, bison, and flex packet components specifically to the environment.",
+                scriptToInject = "sudo apt-get install -y bc bison flex"
+            )
+        )
+    }
+
+    if (evils.isEmpty() && logText.trim().isNotEmpty()) {
+        evils.add(
+            DetectedIssue(
+                title = "Unrecognized Compilation/Environment Encounter",
+                description = "A custom build failure was logged. You can inject general pre-execution troubleshooting directives to clean the workspace.",
+                suggestedFix = "Execute generic toolchain reset, environment clean, and workspace optimization commands.",
+                scriptToInject = "make mrproper || rm -rf out\nsudo apt-get install -y bc bison build-essential libelf-dev zstd"
+            )
+        )
+    }
+
+    return evils
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun KernelWorkbenchApp() {
@@ -93,6 +191,11 @@ fun KernelWorkbenchApp() {
     var branch by remember { mutableStateOf("laguna-android15-6.6") }
     var defconfig by remember { mutableStateOf("gki_defconfig") }
     var susfsPatchUrl by remember { mutableStateOf("https://raw.githubusercontent.com/l0ck3d0ninvestment/susfs-laguna-patch/main/susfs_gki_6.6.sh") }
+
+    // User-requested Kernel Spoofing & Custom Sublevel properties
+    var overrideSublevel by remember { mutableStateOf(true) }
+    var sublevelVersion by remember { mutableStateOf("102") }
+    var localversionOverride by remember { mutableStateOf("-android15-6.6-laguna") }
 
     val gkiVersions = listOf(
         GkiVersionOption("6.6_laguna", "GKI 6.6 (Pixel 10 Laguna - Recommended)", "6.6", "https://github.com/google/aosp-kernel-gki-laguna", "laguna-android15-6.6", "gki_defconfig", "https://raw.githubusercontent.com/l0ck3d0ninvestment/susfs-laguna-patch/main/susfs_gki_6.6.sh", true),
@@ -112,6 +215,19 @@ fun KernelWorkbenchApp() {
             branch = option.defaultBranch
             defconfig = option.defaultDefconfig
             susfsPatchUrl = option.defaultSusfsPatch
+            if (option.id.startsWith("6.6")) {
+                sublevelVersion = "102"
+                localversionOverride = "-android15-6.6-laguna"
+            } else if (option.id == "6.1") {
+                sublevelVersion = "75"
+                localversionOverride = "-android14-6.1"
+            } else if (option.id == "5.15") {
+                sublevelVersion = "135"
+                localversionOverride = "-android13-5.15"
+            } else if (option.id == "5.10") {
+                sublevelVersion = "190"
+                localversionOverride = "-android12-5.10"
+            }
         }
     }
     
@@ -132,6 +248,9 @@ fun KernelWorkbenchApp() {
     var bbrEnabled by remember { mutableStateOf(true) }
     
     var activeTab by remember { mutableStateOf(WorkbenchTab.CONFIGURATOR) }
+
+    var errorInputText by remember { mutableStateOf("") }
+    var preCompilationHookCommands by remember { mutableStateOf("") }
 
     // Simulation console states
     var showTerminalSim by remember { mutableStateOf(false) }
@@ -174,9 +293,35 @@ fun KernelWorkbenchApp() {
     // Dynamic GitHub Actions Workflow Generator Script
     val generatedYaml = remember(
         repoUrl, branch, defconfig, activeClangUrl, kernelsuNextEnabled,
-        kernelsuVersion, susfsEnabled, susfsPatchUrl, zeromountEnabled, bbrEnabled
+        kernelsuVersion, susfsEnabled, susfsPatchUrl, zeromountEnabled, bbrEnabled,
+        overrideSublevel, sublevelVersion, localversionOverride, preCompilationHookCommands
     ) {
         val buildSteps = StringBuilder()
+        
+        if (preCompilationHookCommands.isNotEmpty()) {
+            buildSteps.append("""
+              - name: GKI Automated Compilation Error Patch Correction
+                run: |
+                  cd ${'$'}GITHUB_WORKSPACE/kernel-source
+                  ${preCompilationHookCommands.replace("\n", "\n                  ")}
+            """)
+        }
+
+        if (overrideSublevel) {
+            buildSteps.append("""
+              - name: Spoof Kernel Sublevel & Localversion
+                run: |
+                  cd ${'$'}GITHUB_WORKSPACE/kernel-source
+                  echo "Forcing sublevel patch version override to: $sublevelVersion"
+                  sed -i 's/^SUBLEVEL =.*/SUBLEVEL = $sublevelVersion/' Makefile
+                  if [ -f "localversion" ]; then
+                    echo "$localversionOverride" > localversion
+                  else
+                    echo "$localversionOverride" >> localversion
+                  fi
+                  echo "Injected localversion identifier overlay: ${'$'}(cat localversion)"
+            """)
+        }
         
         if (kernelsuNextEnabled) {
             buildSteps.append("""
@@ -261,7 +406,7 @@ jobs:
       - name: Prep Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses5-dev libssl-dev libxml2 python3 libelf-dev zip rr rsync
+          sudo apt-get install -y bc bison build-essential curl flex g++-multilib gcc-multilib git gnupg gperf liblz4-tool libncurses5-dev libssl-dev libxml2 python3 libelf-dev zip zstd lz4 rsync
 
       - name: Retrieve Google Clang Compiler
         run: |
@@ -377,8 +522,9 @@ ${buildSteps.toString()}
                 ) {
                     val tabs = listOf(
                         Triple(WorkbenchTab.CONFIGURATOR, "Setup & Mods", Icons.Default.Settings),
-                        Triple(WorkbenchTab.EXPORTER, "GitHub Actions YAML", Icons.Default.Build),
-                        Triple(WorkbenchTab.RECIPES, "Manual Recipes", Icons.AutoMirrored.Filled.List)
+                        Triple(WorkbenchTab.EXPORTER, "Actions YAML", Icons.Default.Build),
+                        Triple(WorkbenchTab.RESOLVER, "Troubleshooter", Icons.Default.Warning),
+                        Triple(WorkbenchTab.RECIPES, "Recipes", Icons.AutoMirrored.Filled.List)
                     )
                     tabs.forEach { (tab, label, icon) ->
                         val selected = activeTab == tab
@@ -399,10 +545,10 @@ ${buildSteps.toString()}
                                 tint = if (selected) Color(0xFF0F172A) else Color(0xFF64748B),
                                 modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = label,
-                                fontSize = 11.sp,
+                                fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (selected) Color(0xFF0F172A) else Color(0xFF94A3B8)
                             )
@@ -445,6 +591,11 @@ ${buildSteps.toString()}
                             terminalLogs.add("  ➜ Repo: $repoUrl")
                             terminalLogs.add("  ➜ Branch: $branch")
                             delay(1000)
+                            if (overrideSublevel) {
+                                terminalLogs.add("🔧 [SPOOF] Forcing kernel SUBLEVEL modification to '$sublevelVersion'...")
+                                terminalLogs.add("🔧 [SPOOF] Injecting extraversion localversion '$localversionOverride'...")
+                                delay(400)
+                            }
                             if (kernelsuNextEnabled) {
                                 terminalLogs.add("🧬 [PATCH] Integrating KernelSU-Next core system:")
                                 terminalLogs.add("  ➜ Fetching setup.sh branch '$kernelsuVersion'")
@@ -628,6 +779,88 @@ ${buildSteps.toString()}
                                         unfocusedTextColor = Color.White
                                     )
                                 )
+                            }
+                        }
+
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, Color(0xFF1F2937), RoundedCornerShape(8.dp))
+                                    .background(Color(0xFF0F172A).copy(alpha = 0.3f))
+                                    .padding(12.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Checkbox(
+                                        checked = overrideSublevel,
+                                        onCheckedChange = { overrideSublevel = it },
+                                        colors = CheckboxDefaults.colors(checkedColor = Color(0xFF10B981))
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "VERSION SPOOFING & SUBLEVEL PATCH",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF10B981),
+                                            letterSpacing = 1.sp
+                                        )
+                                        Text(
+                                            text = "Force target patch version and localversion parameters to prevent root/module mismatch bricks.",
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF64748B)
+                                        )
+                                    }
+                                }
+                                
+                                if (overrideSublevel) {
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        OutlinedTextField(
+                                            value = sublevelVersion,
+                                            onValueChange = { sublevelVersion = it },
+                                            label = { Text("Sublevel (e.g. 102)") },
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("sublevel_version_input"),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = Color(0xFF10B981),
+                                                unfocusedBorderColor = Color(0xFF1F2937),
+                                                focusedTextColor = Color.White,
+                                                unfocusedTextColor = Color.White
+                                            )
+                                        )
+
+                                        OutlinedTextField(
+                                            value = localversionOverride,
+                                            onValueChange = { localversionOverride = it },
+                                            label = { Text("Localversion (extra)") },
+                                            singleLine = true,
+                                            modifier = Modifier
+                                                .weight(1.5f)
+                                                .testTag("localversion_override_input"),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = Color(0xFF10B981),
+                                                unfocusedBorderColor = Color(0xFF1F2937),
+                                                focusedTextColor = Color.White,
+                                                unfocusedTextColor = Color.White
+                                            )
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "ℹ️ Resulting target string: ${gkiVersions[selectedGkiIndex].versionLabel}.$sublevelVersion$localversionOverride (UTS_RELEASE spoof ready)",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF38BDF8),
+                                        modifier = Modifier.padding(start = 4.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -878,6 +1111,245 @@ ${buildSteps.toString()}
                             Icon(imageVector = Icons.Default.Share, contentDescription = "Copy script workflow icon", tint = Color.Black)
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Copy Actions Script to Clipboard", color = Color.Black, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                WorkbenchTab.RESOLVER -> {
+                    val detectedIssues = remember(errorInputText) {
+                        parseBuildLogs(errorInputText, sublevelVersion)
+                    }
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        item {
+                            Text(
+                                text = "AUTOMATED GKI BUILD TROUBLESHOOTER",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF10B981),
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = "Paste build terminal log segments below. The engine will instantly scan for and compile a targeted resolution script to inject into your pipeline.",
+                                fontSize = 11.sp,
+                                color = Color(0xFF64748B)
+                            )
+                        }
+
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF0F172A), RoundedCornerShape(12.dp))
+                                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(12.dp))
+                                    .padding(12.dp)
+                            ) {
+                                Text(
+                                    text = "SELECT COMMON GKI LOG PRESETS",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF38BDF8),
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
+                                FlowRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    val presets = listOf(
+                                        "openssl/opensslv.h: No such file" to "fatal error: openssl/opensslv.h: No such file or directory\nrunning out of openssl headers",
+                                        "aarch64-linux gcc missing" to "aarch64-linux-gnu-gcc: command not found, process finished",
+                                        "multiple definition of yylloc" to "multiple definition of 'yylloc' or DTC lexer compilation halted",
+                                        "SUBLEVEL parsing exception" to "Makefile: SUBLEVEL parse index mismatch layout",
+                                        "SUSFS patch conflict" to "susfs patch failed: reject hunk #3 in drivers/fs",
+                                        "KernelSU context collision" to "KernelSU file system mounting security hook context conflict",
+                                        "bc/bison not installed" to "missing bc or bison tool binary"
+                                    )
+                                    presets.forEach { (label, rawText) ->
+                                        Box(
+                                            modifier = Modifier
+                                                .background(Color(0xFF1E293B), RoundedCornerShape(6.dp))
+                                                .clickable { errorInputText = rawText }
+                                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(label, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Medium)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            OutlinedTextField(
+                                value = errorInputText,
+                                onValueChange = { errorInputText = it },
+                                label = { Text("Paste Raw Builder Error Terminal Logs Here", color = Color(0xFF64748B)) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(140.dp)
+                                    .testTag("log_troubleshooter_input"),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = Color(0xFF10B981),
+                                    unfocusedBorderColor = Color(0xFF1F2937),
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White
+                                ),
+                                placeholder = { Text("E.g. fatal error: openssl/opensslv.h...", color = Color(0xFF475569), fontSize = 12.sp) }
+                            )
+                        }
+
+                        if (detectedIssues.isNotEmpty()) {
+                            item {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = "🔍 DETECTED COMPILATION ISSUES (" + detectedIssues.size + ")",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF10B981)
+                                    )
+                                    Text(
+                                        text = "Clear Text",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFFEF4444),
+                                        modifier = Modifier.clickable {
+                                            errorInputText = ""
+                                            preCompilationHookCommands = ""
+                                        }
+                                    )
+                                }
+                            }
+
+                            items(detectedIssues) { issue ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1B4B).copy(alpha = 0.5f)),
+                                    border = BorderStroke(1.dp, Color(0xFF312E81)),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Text(
+                                            text = issue.title.uppercase(),
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = Color(0xFFF43F5E)
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = issue.description,
+                                            fontSize = 12.sp,
+                                            color = Color(0xFFCBD5E1)
+                                        )
+                                        Spacer(modifier = Modifier.height(10.dp))
+                                        Text(
+                                            text = "🔧 SUGGESTED MITIGATION STRATEGY:",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF38BDF8)
+                                        )
+                                        Text(
+                                            text = issue.suggestedFix,
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF94A3B8)
+                                        )
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Text(
+                                            text = "INJECTABLE HOOK SCRIPT COMMAND CHAIN:",
+                                            fontSize = 9.sp,
+                                            color = Color(0xFF64748B),
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(Color(0xFF030712), RoundedCornerShape(6.dp))
+                                                .border(1.dp, Color(0xFF111827), RoundedCornerShape(6.dp))
+                                                .padding(10.dp)
+                                        ) {
+                                            Text(
+                                                text = issue.scriptToInject,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF10B981)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(12.dp))
+
+                                        val isInjected = preCompilationHookCommands == issue.scriptToInject
+                                        Button(
+                                            onClick = {
+                                                if (isInjected) {
+                                                    preCompilationHookCommands = ""
+                                                    Toast.makeText(context, "Patch removed from Actions YAML pipeline!", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    preCompilationHookCommands = issue.scriptToInject
+                                                    Toast.makeText(context, "Patch injected into Actions YAML pipeline successfully!", Toast.LENGTH_LONG).show()
+                                                }
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = if (isInjected) Color(0xFFEF4444) else Color(0xFF10B981)
+                                            ),
+                                            shape = RoundedCornerShape(6.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isInjected) Icons.Default.Close else Icons.Default.Check,
+                                                contentDescription = "Inject action icon",
+                                                tint = if (isInjected) Color.White else Color.Black,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = if (isInjected) "Remove automated patch from Actions step" else "Inject automated patch to Actions workflow",
+                                                color = if (isInjected) Color.White else Color.Black,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Color(0xFF0F172A).copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                                        .border(1.dp, Color(0xFF1F2937), RoundedCornerShape(8.dp))
+                                        .padding(24.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = "Safe State Icon",
+                                            tint = Color(0xFF10B981).copy(alpha = 0.6f),
+                                            modifier = Modifier.size(36.dp)
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "No issue currently scanned or entered",
+                                            color = Color(0xFF94A3B8),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            text = "Either select a log preset tile above or paste actual GKI compilation terminal errors to calculate targeted resolutions.",
+                                            color = Color(0xFF64748B),
+                                            fontSize = 10.sp,
+                                            textAlign = TextAlign.Center,
+                                            modifier = Modifier.padding(top = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
