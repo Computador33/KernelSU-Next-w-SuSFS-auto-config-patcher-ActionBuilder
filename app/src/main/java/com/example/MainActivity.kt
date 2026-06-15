@@ -1632,3 +1632,11 @@ ${buildSteps.toString()}
         }
     }
 }
+
+@androidx.compose.runtime.Composable
+@androidx.compose.ui.tooling.preview.Preview
+fun KernelWorkbenchAppPreview() {
+    MyApplicationTheme {
+        KernelWorkbenchApp()
+    }
+}
